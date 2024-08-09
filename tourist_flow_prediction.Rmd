@@ -1,1 +1,1140 @@
-404: Not Found
+---
+title: "final_project"
+author: "a22cuong"
+date: "2023-10-04"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+install.packages('forecast')
+install.packages('tsutils'); library(tsutils)
+```
+
+```{r}
+pckg <- c("thief","MAPA","tsutils","abind") 
+for (i in 1:length(pckg)){
+  if(!(pckg[i] %in% rownames(installed.packages()))){ 
+    install.packages(pckg[i])
+  }
+  library(pckg[i],character.only = TRUE)
+}
+```
+```{r}
+install.packages("dplyr")
+```
+```{r}
+if (!require("glmnet")){install.packages("glmnet")}; library(glmnet)
+```
+
+```{r}
+library(forecast)
+library(tsutils)
+library(dplyr)
+```
+
+```{r}
+load("dataTour.Rdata")
+load("IMFdata.Rdata")
+```
+
+```{r}
+#create a subset from macroeconomic dataset
+russiasub <- X$Russia
+russiasub <- window(russiasub,start=c(1995),end=c(2019))
+```
+
+```{r}
+#load the primary dataset
+df <- dataTour$Finland 
+#drop the year 2020 observations
+df <- head(df, -1)
+```
+We start exploring each country time series and build accordance models 
+```{r}
+russia <- df[, "Russia"]
+china <- df[,"China"]
+germany <- df[, "Germany"]
+uk <- df[, "United Kingdom"]
+sweden <- df[, "Sweden"]
+```
+
+```{r}
+# Create a grid of plots
+par(mfrow=c(2,3))
+plot(russia)
+plot(china)
+plot(germany)
+plot(uk)
+plot(sweden)
+```
+```{r}
+par(mfrow=c(2,3))
+pacf(russia)
+pacf(china)
+pacf(germany)
+pacf(uk)
+pacf(sweden)
+```
+```{r}
+par(mfrow=c(3,1))
+plot(cmav(germany),main="Germany")
+plot(cmav(uk),main="UK")
+plot(cmav(sweden),main="Sweden")
+```
+
+
+##Russia
+```{r}
+#split training and test sets
+russia.tst <- tail(russia,4)
+russia.trn <- head(russia,24*4)
+#observe potential trend, seasonality
+cma.russia <- cmav(russia.trn,outplot=1) #perform central moving average  
+seasplot(russia.trn)  #observe seasonality
+dc.russia <- decomp(russia.trn,outplot=1) #decomposition
+pacf(russia.trn)
+```
+There is presence of trend and seasonality in the time series
+```{r}
+fit1 <- ets(russia.trn) 
+fit1
+```
+We build the ETS model
+```{r}
+#split train set to smaller training set and validation set
+russia.ins <- head(russia.trn,18*4)
+russia.val <- tail(russia.trn,5*4)
+#observe maximum step of prediction can be included in the validation set
+h <- 4
+omax <- length(russia.val) - h + 1
+models <- c("AAA","ANA","MAM","MMM","Naive") 
+damped <- c(TRUE, FALSE, TRUE, TRUE)
+err <- array(NA,c(omax,5)) 
+frcs <- array(NA,c(h,5))
+#Perform rolling origin on in-sample set
+for (o in 1:omax){
+  russia.ins <- head(russia.trn,18*4-1+o) 
+  russia.val <- tail(russia.trn,5*4-o+1) 
+  for (m in 1:4){
+    fit1 <- ets(russia.ins,model=models[m],damped=damped[m]) 
+    frcs[,m] <- forecast(fit1,h=h)$mean
+    err[o,m] <- mean(abs(russia.val[1:h] - frcs[,m]))
+  }
+  frcs[,5] <- tail(russia.ins,frequency(russia.ins))[1:h] 
+  err[o,5] <- mean(abs(russia.val[1:h] - frcs[,5]))
+}
+colnames(err) <- c("AAA","ANA","MAM","MMM","Naive")
+errMean <- colMeans(err)
+errMean
+```
+```{r}
+# out-of-sample validation
+modelsTest <- c("AAA","ANA","MAM","MMM","MNM", "Naive", "CombMean", "CombMedian")
+dampedTest <- c(TRUE, FALSE, TRUE, TRUE,FALSE)
+omaxTest <- length(russia.tst) - h + 1
+errTest <- array(NA,c(omaxTest,8))
+frcsTest <- array(NA,c(h,8))
+for (o in 1:omaxTest){
+  russia.trnTest <- head(russia,21*4-1+o) 
+  russia.tstTest <- tail(russia,2*4-o+1) 
+    for (m in 1:5){
+      fit1 <- ets(russia.trnTest,model=modelsTest[m],damped=dampedTest[m]) 
+      frcsTest[,m] <- forecast(fit1,h=h)$mean
+      errTest[o,m] <- mean(abs(russia.tstTest[1:h] - frcsTest[,m]))
+    }
+  frcsTest[,6] <- tail(russia.trnTest,frequency(russia.trnTest))[1:h]
+  errTest[o,6] <- mean(abs(russia.tstTest[1:h] - frcsTest[,6]))
+  frcsTest[,7] <- apply(frcsTest[,1:5],1,mean)
+  errTest[o,7] <- mean(abs(russia.tstTest[1:h] - frcsTest[,7]))
+  frcsTest[,8] <- apply(frcsTest[,1:5],1,median)
+  errTest[o,8] <- mean(abs(russia.tstTest[1:h] - frcsTest[,8]))
+}
+colnames(errTest) <- c("AAA","ANA","MAM","MMM","MNM","Naive","Comb.Mean","Comb.Median")
+errMeanTest <- colMeans(errTest)
+errMeanTest
+```
+
+Naive gives the smallest error hence it is preferable
+```{r}
+mape1 <- MAPE(russia.tst,tail(russia.trnTest,frequency(russia.trnTest))[1:4]) * 100
+cat("MAPE:", mape1, "%\n")
+```
+```{r}
+#Building model with AAA
+fit1 <- ets(russia.trn,model="ANA",damped=FALSE) 
+frc1 <- forecast(fit1,h=4)
+mape <- MAPE(russia.tst,frc1$mean)*100
+cat("MAPE:", mape, "%\n")
+```
+
+Now we construct lag for regression modeling
+
+```{r}
+n <- length(russia.trn)
+X <- array(NA,c(n,6))
+for (i in 1:6){
+  X[i:n,i] <- russia.trn[1:(n-i+1)]
+}
+colnames(X) <- c("y",paste0("lag",1:5))
+X <- as.data.frame(X)
+plot(X)
+# The complete model
+fit2 <- lm(y~.,data=X)
+# The stepwise model
+fit2 <- step(fit2)
+# In-sample fit:
+plot(X$y,type="l")
+frc2 <- predict(fit2,X)
+lines(frc2,col="red")
+frc2 <- array(NA,c(4,1))
+for (i in 1:4){
+  Xnew <- tail(russia.trn,5)
+  Xnew <- c(Xnew,frc2)
+  Xnew <- Xnew[i:(4+i)]
+  Xnew <- Xnew[5:1]
+  Xnew <- array(Xnew, c(1,5)) 
+  colnames(Xnew) <- paste0("lag",1:5)
+  Xnew <- as.data.frame(Xnew)
+  frc2[i] <- predict(fit2,Xnew)
+} 
+mape <- MAPE(russia.tst,frc2)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#dummies variables
+D <- factor(rep(1:4,24))
+X2 <- cbind(X,D)
+colnames(X2) <- c(colnames(X2)[1:6],"D")
+fit3 <- lm(y~.,data=X2)
+summary(fit3)
+# Find NA in X2
+idx <- is.na(X2)
+idx <- rowSums(idx)
+idx <- idx == 0
+fit_temp <- lm(y~.,data=X2[idx,])
+# fit_temp is the same as fit3, without the first NA part 
+fit4 <- step(fit_temp)
+summary(fit4)
+frc3 <- predict(fit4,X2)
+ts.plot(russia.trn,frc3,col=c("black","red"))
+frc3 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  Xnew <- tail(russia.trn,5)
+  Xnew <- c(Xnew,frc3)
+  Xnew <- Xnew[i:(4+i)]
+  Xnew <- Xnew[5:1]
+  Xnew <- array(Xnew, c(1,5))
+  colnames(Xnew) <- paste0("lag",1:5)
+  Xnew <- as.data.frame(Xnew)
+  D <- as.factor(rep(1:4,1)[i])
+  frc3[i] <- predict(fit4,Xnew)
+}
+mape <- MAPE(russia.tst,frc3)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Lasso
+xx <- as.matrix(X[-(1:6),-1])
+# For the target I retain only the first column 
+yy <- as.matrix(X[-(1:6),1])
+lasso <- cv.glmnet(x=xx,y=yy)
+frc4 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(russia.trn,5),frc4)
+  Xnew <- (Xnew[i:(4+i)])[5:1]
+  Xnew <- array(Xnew, c(1,5)) 
+  colnames(Xnew) <- paste0("lag",1:5) 
+  # Forecast
+  frc4[i] <- predict(lasso,Xnew)
+}
+mape <- MAPE(russia.tst,frc4)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Ridge
+ridge <- cv.glmnet(x=xx,y=yy,alpha=0)
+frc5 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(russia.trn,5),frc5)
+  Xnew <- (Xnew[i:(4+i)])[5:1]
+  Xnew <- array(Xnew, c(1,5))
+  colnames(Xnew) <- paste0("lag",1:5) # Forecast 
+  frc5[i] <- predict(ridge,Xnew)
+}
+mape <- MAPE(russia.tst,frc5)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Building THieF
+frc6 <- thief(russia.trn,h=4,usemodel="arima")
+frc6_values <- frc6$mean
+mape <- MAPE(russia.tst,frc6_values)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#building differencing model to handling trend
+X3<-X
+for (i in 1:ncol(X3)){
+  X3[,i] <- c(NA,diff(X3[,i]))
+} 
+summary(lm(y~.,X3))
+if (any(is.na(X3))) {
+  # Handle missing values 
+  dataset_clean <- na.omit(X3)  
+  # Re-run analysis, including stepwise model selection
+  fit5 <- lm(y~., data = dataset_clean)
+  fit6 <- step(fit5)
+} else {
+  # No missing values, so proceed with analysis
+  fit5 <- lm(y~., data = X3)
+  fit6 <- step(fit5)
+}
+frc7 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Calculate the differences of the in-sample data
+  russia.diff <- diff(russia.trn)
+  # Create lags - same as before
+  Xnew <- tail(russia.diff,5)
+  Xnew <- c(Xnew,frc7)
+  Xnew <- Xnew[i:(4+i)]
+  Xnew <- Xnew[5:1]
+  Xnew <- array(Xnew, c(1,5)) 
+  colnames(Xnew) <- paste0("lag",1:5) 
+  Xnew <- as.data.frame(Xnew)
+  # Forecast
+  frc7[i] <- predict(fit6,Xnew)
+}
+```
+
+```{r}
+# Transform to time series
+frc7 <- ts(frc7,frequency=frequency(russia.tst),start=start(russia.tst)) # Plot
+ts.plot(diff(russia.trn),frc7,col=c("black","red"))
+```
+
+```{r}
+frc7ud <- cumsum(c(tail(russia.trn,1),frc7))
+frc7ud <- frc7ud[-1]
+```
+
+```{r}
+frc2 <- ts(frc2,frequency=frequency(russia.tst),start=start(russia.tst))
+frc3 <- ts(frc3,frequency=frequency(russia.tst),start=start(russia.tst))
+frc4 <- ts(frc4,frequency=frequency(russia.tst),start=start(russia.tst))
+frc5 <- ts(frc5,frequency=frequency(russia.tst),start=start(russia.tst))
+frc6 <- ts(frc6_values,frequency=frequency(russia.tst),start=start(russia.tst))
+frc7ud <- ts(frc7ud,frequency=frequency(russia.tst),start=start(russia.tst))
+
+# Plot
+ts.plot(tail(russia.trn,16), russia.tst, frc1$mean, frc2, frc3, frc4, frc5, frc6, frc7ud, col = c("black", "black", "red", "blue","green","yellow","purple","orange","brown"))
+legend("bottomleft", c("ETS(ANA)","Stepwise", "Dummies", "Lasso", "Ridge","Thief", "Differencing"), col = c("red", "blue","green","yellow","purple","orange","brown"), lty = 1)
+```
+China
+```{r}
+#split training and test sets
+china.tst <- tail(china,4)
+china.trn <- head(china,4*24)
+#observe potential trend, seasonality
+cma.china <- cmav(china.trn,outplot=1) #seems like the ts trend 
+seasplot(china.trn) #there is no sign of seasonality 
+dc.china <- decomp(china.trn,outplot=1) #the plot shows that there is appearance of seasonality
+pacf(china.trn)
+```
+```{r}
+fit1 <- ets(china.trn) 
+fit1
+```
+
+```{r}
+#Building ETS on training set
+#split train set to smaller training set and validation set
+china.ins <- head(china.trn,18*4)
+china.val <- tail(china.trn,5*4)
+h <- 4
+#observe maximum step of prediction can be included in the validation set
+omax <- length(china.val) - h + 1
+models <- c("AAA","ANA","MMM","MAM","Naive") 
+damped <- c(TRUE, FALSE, TRUE,TRUE)
+err <- array(NA,c(omax,5)) 
+frcs <- array(NA,c(h,5))
+#Perform rolling origin on in-sample set
+for (o in 1:omax){
+  china.ins <- head(china.trn,19*4-1+o) 
+  china.val <- tail(china.trn,5*4-o+1) 
+  for (m in 1:4){
+    fit1 <- ets(china.ins,model=models[m],damped=damped[m]) 
+    frcs[,m] <- forecast(fit1,h=h)$mean
+    err[o,m] <- mean(abs(china.val[1:h] - frcs[,m]))/100
+  }
+  frcs[,5] <- tail(china.ins,frequency(china.ins))[1:h] 
+  err[o,5] <- mean(abs(china.val[1:h] - frcs[,5]))/100
+}
+colnames(err) <- c("AAA","ANA","MMM","MAM","Naive")
+errMean <- colMeans(err)
+errMean
+```
+
+```{r}
+# Building ETS on test set
+modelsTest <- c("AAA","ANA","MAM","MMM", "Naive", "CombMean", "CombMedian")
+dampedTest <- c(TRUE, FALSE, TRUE,TRUE)
+omaxTest <- length(china.tst) - h + 1
+errTest <- array(NA,c(omaxTest,7))
+frcsTest <- array(NA,c(h,7))
+for (o in 1:omaxTest){
+  china.trnTest <- head(china,23*4-1+o) 
+  china.tstTest <- tail(china,2*4-o+1) 
+    for (m in 1:4){
+      fit1 <- ets(china.trnTest,model=modelsTest[m],damped=dampedTest[m]) 
+      frcsTest[,m] <- forecast(fit1,h=h)$mean
+      errTest[o,m] <- mean(abs(china.tstTest[1:h] - frcsTest[,m]))/100
+    }
+  frcsTest[,5] <- tail(china.trnTest,frequency(china.trnTest))[1:h]
+  errTest[o,5] <- mean(abs(china.tstTest[1:h] - frcsTest[,5]))/100
+  frcsTest[,6] <- apply(frcsTest[,1:5],1,mean)
+  errTest[o,6] <- mean(abs(china.tstTest[1:h] - frcsTest[,6]))/100
+  frcsTest[,7] <- apply(frcsTest[,1:5],1,median)
+  errTest[o,7] <- mean(abs(china.tstTest[1:h] - frcsTest[,7]))/100
+}
+colnames(errTest) <- c("AAA","ANA","MAM","MMMd","Naive","Comb.Mean","Comb.Median")
+errMeanTest <- colMeans(errTest)
+errMeanTest
+```
+
+AAA model performs the best in both training and test set
+
+```{r}
+#Building model with AAA
+fit1 <- ets(china.trn,model="AAA",damped=TRUE) 
+frc1 <- forecast(fit1,h=4)
+mape <- MAPE(china.tst,frc1$mean)*100
+cat("MAPE:", mape, "%\n")
+```
+
+Construct lag 
+```{r}
+n <- length(china.trn)
+X <- array(NA,c(n,7))
+for (i in 1:7){
+  X[i:n,i] <- china.trn[1:(n-i+1)]
+}
+colnames(X) <- c("y",paste0("lag",1:6))
+X <- as.data.frame(X)
+plot(X)
+# The complete model
+fit2 <- lm(y~.,data=X)
+# The stepwise model
+fit2 <- step(fit2)
+# In-sample fit:
+plot(X$y,type="l")
+frc2 <- predict(fit2,X)
+lines(frc2,col="red")
+frc2 <- array(NA,c(4,1))
+for (i in 1:4){
+  Xnew <- tail(china.trn,6)
+  Xnew <- c(Xnew,frc2)
+  Xnew <- Xnew[i:(5+i)]
+  Xnew <- Xnew[6:1]
+  Xnew <- array(Xnew, c(1,6)) 
+  colnames(Xnew) <- paste0("lag",1:6)
+  Xnew <- as.data.frame(Xnew)
+  frc2[i] <- predict(fit2,Xnew)
+} 
+mape <- MAPE(china.tst,frc2)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Dummies variable
+D <- factor(rep(1:4,24))
+X2 <- cbind(X,D)
+colnames(X2) <- c(colnames(X2)[1:7],"D")
+fit3 <- lm(y~.,data=X2)
+summary(fit3)
+# Find NA in X2
+idx <- is.na(X2)
+idx <- rowSums(idx)
+idx <- idx == 0
+fit_temp <- lm(y~.,data=X2[idx,])
+# fit_temp is the same as fit3, without the first NA part 
+fit4 <- step(fit_temp)
+summary(fit4)
+frc3 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  Xnew <- tail(china.trn,6)
+  Xnew <- c(Xnew,frc3)
+  Xnew <- Xnew[i:(5+i)]
+  Xnew <- Xnew[6:1]
+  Xnew <- array(Xnew, c(1,6))
+  colnames(Xnew) <- paste0("lag",1:6)
+  Xnew <- as.data.frame(Xnew)
+  D <- as.factor(rep(1:4,1)[i])
+  frc3[i] <- predict(fit4,Xnew)
+}
+mape <- MAPE(china.tst,frc3)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Lasso
+xx <- as.matrix(X[-(1:6),-1])
+# For the target I retain only the first column 
+yy <- as.matrix(X[-(1:6),1])
+lasso <- cv.glmnet(x=xx,y=yy)
+frc4 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(china.trn,6),frc4)
+  Xnew <- (Xnew[i:(5+i)])[6:1]
+  Xnew <- array(Xnew, c(1,6)) 
+  colnames(Xnew) <- paste0("lag",1:6) 
+  # Forecast
+  frc4[i] <- predict(lasso,Xnew)
+}
+mape <- MAPE(china.tst,frc4)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Ridge
+ridge <- cv.glmnet(x=xx,y=yy,alpha=0)
+frc5 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(china.trn,6),frc5)
+  Xnew <- (Xnew[i:(5+i)])[6:1]
+  Xnew <- array(Xnew, c(1,6))
+  colnames(Xnew) <- paste0("lag",1:6) # Forecast 
+  frc5[i] <- predict(ridge,Xnew)
+}
+mape <- MAPE(china.tst,frc5)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Building THieF
+frc6 <- thief(china.trn,h=4,usemodel="arima")
+frc6_values <- frc6$mean
+mape <- MAPE(china.tst,frc6_values)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+frc2 <- ts(frc2,frequency=frequency(china.tst),start=start(china.tst))
+frc3 <- ts(frc3,frequency=frequency(china.tst),start=start(china.tst))
+frc4 <- ts(frc4,frequency=frequency(china.tst),start=start(china.tst))
+frc5 <- ts(frc5,frequency=frequency(china.tst),start=start(china.tst))
+frc6 <- ts(frc6_values,frequency=frequency(china.tst),start=start(china.tst))
+# Plot
+ts.plot(tail(china.trn,4), china.tst, frc1$mean, frc2, frc3, frc4, frc5, frc6, col = c("black", "black", "red", "blue","green","purple","orange","brown"))
+legend("bottomleft", c("ETS(AAA)","Stepwise", "Dummies","Lasso","Ridge","Thief"), col = c("red", "blue","green","purple","orange","brown"), lty = 1)
+```
+
+Examine germany time series
+```{r}
+#split training and test sets
+germany.tst <- tail(germany,4)
+germany.trn <- head(germany,4*24)
+#observe potential trend, seasonality
+cma.germany <- cmav(germany.trn,outplot=1) #seems like the ts trend 
+seasplot(germany.trn) #there is no sign of seasonality 
+dc.germany <- decomp(germany.trn,outplot=1) #the plot shows that there is appearance of seasonality
+pacf(germany.trn)
+```
+```{r}
+fit1 <- ets(germany.trn) 
+fit1
+```
+
+```{r}
+#Building ETS on training set
+#split train set to smaller training set and validation set
+germany.ins <- head(germany.trn,18*4)
+germany.val <- tail(germany.trn,5*4)
+h <- 4
+#observe maximum step of prediction can be included in the validation set
+omax <- length(germany.val) - h + 1
+models <- c("AAA","ANA","MNM","MAM","Naive") 
+damped <- c(TRUE, FALSE, FALSE,TRUE)
+err <- array(NA,c(omax,5)) 
+frcs <- array(NA,c(h,5))
+#Perform rolling origin on in-sample set
+for (o in 1:omax){
+  germany.ins <- head(germany.trn,19*4-1+o) 
+  germany.val <- tail(germany.trn,5*4-o+1) 
+  for (m in 1:4){
+    fit1 <- ets(germany.ins,model=models[m],damped=damped[m]) 
+    frcs[,m] <- forecast(fit1,h=h)$mean
+    err[o,m] <- mean(abs(germany.val[1:h] - frcs[,m]))
+  }
+  frcs[,5] <- tail(germany.ins,frequency(germany.ins))[1:h] 
+  err[o,5] <- mean(abs(germany.val[1:h] - frcs[,5]))
+}
+colnames(err) <- c("AAA","ANA","MNM","MAM","Naive")
+errMean <- colMeans(err)
+errMean
+```
+```{r}
+# Building ETS on test set
+modelsTest <- c("AAA","ANA","MNM","MAM", "Naive", "CombMean", "CombMedian")
+dampedTest <- c(TRUE, FALSE, FALSE,TRUE)
+omaxTest <- length(germany.tst) - h + 1
+errTest <- array(NA,c(omaxTest,7))
+frcsTest <- array(NA,c(h,7))
+for (o in 1:omaxTest){
+  germany.trnTest <- head(germany,23*4-1+o) 
+  germany.tstTest <- tail(germany,2*4-o+1) 
+    for (m in 1:4){
+      fit1 <- ets(germany.trnTest,model=modelsTest[m],damped=dampedTest[m]) 
+      frcsTest[,m] <- forecast(fit1,h=h)$mean
+      errTest[o,m] <- mean(abs(germany.tstTest[1:h] - frcsTest[,m]))/100
+    }
+  frcsTest[,5] <- tail(germany.trnTest,frequency(germany.trnTest))[1:h]
+  errTest[o,5] <- mean(abs(germany.tstTest[1:h] - frcsTest[,5]))
+  frcsTest[,6] <- apply(frcsTest[,1:5],1,mean)
+  errTest[o,6] <- mean(abs(germany.tstTest[1:h] - frcsTest[,6]))
+  frcsTest[,7] <- apply(frcsTest[,1:5],1,median)
+  errTest[o,7] <- mean(abs(germany.tstTest[1:h] - frcsTest[,7]))
+}
+colnames(errTest) <- c("AAA","ANA","MNM","MAM","Naive","Comb.Mean","Comb.Median")
+errMeanTest <- colMeans(errTest)
+errMeanTest
+```
+```{r}
+#Building model with MNM
+fit1 <- ets(germany.trn,model="MNM",damped=FALSE) 
+frc1 <- forecast(fit1,h=4)
+mape <- MAPE(germany.tst,frc1$mean)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+n <- length(germany.trn)
+X <- array(NA,c(n,5))
+for (i in 1:5){
+  X[i:n,i] <- germany.trn[1:(n-i+1)]
+}
+colnames(X) <- c("y",paste0("lag",1:4))
+X <- as.data.frame(X)
+plot(X)
+```
+```{r}
+fit2 <- lm(y~.,data=X)
+fit2 <- step(fit2)
+#Forecast on training set
+plot(X$y,type="l")
+frc2 <- predict(fit2,X)
+lines(frc2,col="red")
+#Forecast on testing set
+frc2 <- array(NA,c(4,1))
+for (i in 1:4){
+  # For the Xnew we use the last five observations as before
+  Xnew <- tail(germany.trn,4)
+  # Add to that the forecasted values
+  Xnew <- c(Xnew,frc2)
+  # Take the relevant 5 values. The index i helps us to get the right ones 
+  Xnew <- Xnew[i:(3+i)]
+  # If i = 1 then this becomes Xnew[1:5].
+  # If i = 2 then this becomes Xnew[2:6] - just as the example above.
+  # Reverse the order
+  Xnew <- Xnew[4:1]
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1,4)) # c(1,5) are the dimensions of the array 
+  colnames(Xnew) <- paste0("lag",1:4) # I have already reversed the order 
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  # Forecast
+  frc2[i] <- predict(fit2,Xnew)
+} 
+mape <- MAPE(germany.tst,frc2)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+#Building dummies variable model
+D <- factor(rep(1:4,24))
+X2 <- cbind(X,D)
+colnames(X2) <- c(colnames(X2)[1:5],"D")
+fit3 <- lm(y~.,data=X2)
+summary(fit3)
+# Find NA in X2
+idx <- is.na(X2)
+idx <- rowSums(idx)
+idx <- idx == 0
+fit_temp <- lm(y~.,data=X2[idx,])
+# fit_temp is the same as fit3, without the first NA part 
+fit4 <- step(fit_temp)
+summary(fit4)
+frc3 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  Xnew <- tail(germany.trn,4)
+  Xnew <- c(Xnew,frc3)
+  Xnew <- Xnew[i:(3+i)]
+  Xnew <- Xnew[4:1]
+  Xnew <- array(Xnew, c(1,4))
+  colnames(Xnew) <- paste0("lag",1:4)
+  Xnew <- as.data.frame(Xnew)
+  D <- as.factor(rep(1:4,1)[i])
+  frc3[i] <- predict(fit4,Xnew)
+}
+mape <- MAPE(germany.tst,frc3)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+#Lasso
+xx <- as.matrix(X[-(1:4),-1])
+# For the target I retain only the first column 
+yy <- as.matrix(X[-(1:4),1])
+lasso <- cv.glmnet(x=xx,y=yy)
+frc4 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(germany.trn,4),frc4)
+  Xnew <- (Xnew[i:(3+i)])[4:1]
+  Xnew <- array(Xnew, c(1,4)) 
+  colnames(Xnew) <- paste0("lag",1:4) 
+  # Forecast
+  frc4[i] <- predict(lasso,Xnew)
+}
+mape <- MAPE(germany.tst,frc4)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Ridge
+ridge <- cv.glmnet(x=xx,y=yy,alpha=0)
+frc5 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(russia.trn,4),frc5)
+  Xnew <- (Xnew[i:(4+i)])[4:1]
+  Xnew <- array(Xnew, c(1,4))
+  colnames(Xnew) <- paste0("lag",1:4) # Forecast 
+  frc5[i] <- predict(ridge,Xnew)
+}
+mape <- MAPE(germany.tst,frc5)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Building THieF
+frc6 <- thief(germany.trn,h=4,usemodel="arima")
+frc6_values <- frc6$mean
+mape <- MAPE(germany.tst,frc6_values)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+frc2 <- ts(frc2,frequency=frequency(germany.tst),start=start(germany.tst))
+frc3 <- ts(frc3,frequency=frequency(germany.tst),start=start(germany.tst))
+frc4 <- ts(frc4,frequency=frequency(germany.tst),start=start(germany.tst))
+frc5 <- ts(frc5,frequency=frequency(germany.tst),start=start(germany.tst))
+frc6 <- ts(frc6_values,frequency=frequency(germany.tst),start=start(germany.tst))
+# Plot
+ts.plot(tail(germany.trn,4), germany.tst, frc1$mean, frc2, frc3, frc4, frc5, frc6, col = c("black", "black", "red", "blue","green","purple", "orange", "brown"))
+legend("bottomleft", c("ETS(MNM)","Stepwise", "Dummies", "Lasso", "Ridge","Thief"), col = c("red", "blue","green", "purple", "orange", "brown"), lty = 1)
+```
+
+Examine UK time series
+```{r}
+#split training and test sets
+uk.tst <- tail(uk,4)
+uk.trn <- head(uk,4*24)
+#observe potential trend, seasonality
+cma.uk <- cmav(uk.trn,outplot=1) #seems like the ts trend 
+seasplot(uk.trn) #there is no sign of seasonality 
+dc.uk <- decomp(uk.trn,outplot=1) #the plot shows that there is appearance of seasonality
+pacf(uk.trn)
+```
+```{r}
+fit1 <- ets(uk.trn) 
+fit1
+```
+```{r}
+#Building ETS on training set
+#split train set to smaller training set and validation set
+uk.ins <- head(uk.trn,18*4)
+uk.val <- tail(uk.trn,5*4)
+h <- 4
+#observe maximum step of prediction can be included in the validation set
+omax <- length(uk.val) - h + 1
+models <- c("AAA","ANA","MNM","MAM","Naive") 
+damped <- c(TRUE, FALSE, FALSE,FALSE)
+err <- array(NA,c(omax,5)) 
+frcs <- array(NA,c(h,5))
+#Perform rolling origin on in-sample set
+for (o in 1:omax){
+  uk.ins <- head(uk.trn,19*4-1+o) 
+  uk.val <- tail(uk.trn,5*4-o+1) 
+  for (m in 1:4){
+    fit1 <- ets(uk.ins,model=models[m],damped=damped[m]) 
+    frcs[,m] <- forecast(fit1,h=h)$mean
+    err[o,m] <- mean(abs(uk.val[1:h] - frcs[,m]))
+  }
+  frcs[,5] <- tail(uk.ins,frequency(uk.ins))[1:h] 
+  err[o,5] <- mean(abs(uk.val[1:h] - frcs[,5]))
+}
+colnames(err) <- c("AAA","ANA","MNM","MAM","Naive")
+errMean <- colMeans(err)
+errMean
+```
+```{r}
+# Building ETS on test set
+modelsTest <- c("AAA","ANA","MNM","MAM", "Naive", "CombMean", "CombMedian")
+dampedTest <- c(TRUE, FALSE, FALSE,FALSE)
+omaxTest <- length(uk.tst) - h + 1
+errTest <- array(NA,c(omaxTest,7))
+frcsTest <- array(NA,c(h,7))
+for (o in 1:omaxTest){
+  uk.trnTest <- head(uk,23*4-1+o) 
+  uk.tstTest <- tail(uk,2*4-o+1) 
+    for (m in 1:4){
+      fit1 <- ets(uk.trnTest,model=modelsTest[m],damped=dampedTest[m]) 
+      frcsTest[,m] <- forecast(fit1,h=h)$mean
+      errTest[o,m] <- mean(abs(uk.tstTest[1:h] - frcsTest[,m]))
+    }
+  frcsTest[,5] <- tail(uk.trnTest,frequency(uk.trnTest))[1:h]
+  errTest[o,5] <- mean(abs(uk.tstTest[1:h] - frcsTest[,5]))
+  frcsTest[,6] <- apply(frcsTest[,1:5],1,mean)
+  errTest[o,6] <- mean(abs(uk.tstTest[1:h] - frcsTest[,6]))
+  frcsTest[,7] <- apply(frcsTest[,1:5],1,median)
+  errTest[o,7] <- mean(abs(uk.tstTest[1:h] - frcsTest[,7]))
+}
+colnames(errTest) <- c("AAA","ANA","MNM","MAM","Naive","Comb.Mean","Comb.Median")
+errMeanTest <- colMeans(errTest)
+errMeanTest
+```
+```{r}
+#Building model with MAM
+fit1 <- ets(uk.trn,model="MAM",damped=FALSE) 
+frc1 <- forecast(fit1,h=4)
+mape <- MAPE(uk.tst,frc1$mean)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+n <- length(uk.trn)
+X <- array(NA,c(n,8))
+for (i in 1:8){
+  X[i:n,i] <- uk.trn[1:(n-i+1)]
+}
+colnames(X) <- c("y",paste0("lag",1:7))
+X <- as.data.frame(X)
+plot(X)
+if (any(is.na(X))) {
+  # Handle missing values 
+  dataset_clean <- na.omit(X)  
+  # Re-run analysis, including stepwise model selection
+  fit2 <- lm(y~.,data=dataset_clean)
+  fit2 <- step(fit2)
+} else {
+  # No missing values, so proceed with analysis
+  fit2 <- lm(y~.,data=dataset_clean)
+  fit2 <- step(fit2)
+}
+#Forecast on training set
+plot(X$y,type="l")
+frc2 <- predict(fit2,X)
+lines(frc2,col="red")
+#Forecast on testing set
+frc2 <- array(NA,c(4,1))
+for (i in 1:4){
+  Xnew <- tail(uk.trn,7)
+  Xnew <- c(Xnew,frc2)
+  Xnew <- Xnew[i:(6+i)]
+  Xnew <- Xnew[7:1]
+  Xnew <- array(Xnew, c(1,7)) 
+  colnames(Xnew) <- paste0("lag",1:7)  
+  Xnew <- as.data.frame(Xnew)
+  frc2[i] <- predict(fit2,Xnew)
+} 
+mape <- MAPE(uk.tst,frc2)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+D <- factor(rep(1:4,24))
+X2 <- cbind(X,D)
+colnames(X2) <- c(colnames(X2)[1:8],"D")
+fit3 <- lm(y~.,data=X2)
+summary(fit3)
+# Find NA in X2
+idx <- is.na(X2)
+idx <- rowSums(idx)
+idx <- idx == 0
+fit_temp <- lm(y~.,data=X2[idx,])
+# fit_temp is the same as fit3, without the first NA part 
+fit4 <- step(fit_temp)
+summary(fit4)
+frc3 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  Xnew <- tail(uk.trn,7)
+  Xnew <- c(Xnew,frc3)
+  Xnew <- Xnew[i:(6+i)]
+  Xnew <- Xnew[7:1]
+  Xnew <- array(Xnew, c(1,7))
+  colnames(Xnew) <- paste0("lag",1:7)
+  Xnew <- as.data.frame(Xnew)
+  D <- as.factor(rep(1:4,1)[i])
+  frc3[i] <- predict(fit4,Xnew)
+}
+mape <- MAPE(uk.tst,frc3)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+#Lasso
+xx <- as.matrix(X[-(1:7),-1])
+# For the target I retain only the first column 
+yy <- as.matrix(X[-(1:7),1])
+lasso <- cv.glmnet(x=xx,y=yy)
+frc4 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(uk.trn,7),frc4)
+  Xnew <- (Xnew[i:(6+i)])[7:1]
+  Xnew <- array(Xnew, c(1,7)) 
+  colnames(Xnew) <- paste0("lag",1:7) 
+  # Forecast
+  frc4[i] <- predict(lasso,Xnew)
+}
+mape <- MAPE(uk.tst,frc4)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Ridge
+ridge <- cv.glmnet(x=xx,y=yy,alpha=0)
+frc5 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(uk.trn,7),frc5)
+  Xnew <- (Xnew[i:(6+i)])[7:1]
+  Xnew <- array(Xnew, c(1,7))
+  colnames(Xnew) <- paste0("lag",1:7) # Forecast 
+  frc5[i] <- predict(ridge,Xnew)
+}
+mape <- MAPE(uk.tst,frc5)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+#Building THieF
+frc6 <- thief(uk.trn,h=4,usemodel="arima")
+frc6_values <- frc6$mean
+mape <- MAPE(uk.tst,frc6_values)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+frc2 <- ts(frc2,frequency=frequency(uk.tst),start=start(uk.tst))
+frc3 <- ts(frc3,frequency=frequency(uk.tst),start=start(uk.tst))
+frc4 <- ts(frc4,frequency=frequency(uk.tst),start=start(uk.tst))
+frc5 <- ts(frc5,frequency=frequency(uk.tst),start=start(uk.tst))
+frc6 <- ts(frc6_values,frequency=frequency(uk.tst),start=start(uk.tst))
+# Plot
+ts.plot(tail(uk.trn,4), uk.tst, frc1$mean, frc2, frc3, frc4, frc5, frc6, col = c("black", "black", "red", "blue","green", "purple", "orange","brown"))
+legend("bottomleft", c("ETS(MAM)","Stepwise", "Dummies", "Lasso", "Ridge","Thief"), col = c("red", "blue","green", "purple", "orange","brown"), lty = 1)
+```
+
+```{r}
+#split training and test sets
+sweden.tst <- tail(sweden,4)
+sweden.trn <- head(sweden,4*24)
+#observe potential trend, seasonality
+cma.sweden <- cmav(sweden.trn,outplot=1) #seems like the ts trend 
+seasplot(sweden.trn) #there is no sign of seasonality 
+dc.sweden <- decomp(sweden.trn,outplot=1) #the plot shows that there is appearance of seasonality
+pacf(sweden.trn)
+```
+```{r}
+fit1 <- ets(sweden.trn) 
+fit1
+```
+```{r}
+#Building ETS on training set
+#split train set to smaller training set and validation set
+sweden.ins <- head(sweden.trn,19*4)
+sweden.val <- tail(sweden.trn,5*4)
+h <- 4
+#observe maximum step of prediction can be included in the validation set
+omax <- length(sweden.val) - h + 1
+models <- c("AAA","ANA","MNM","MAM","Naive") 
+damped <- c(TRUE, FALSE, FALSE,FALSE)
+err <- array(NA,c(omax,5)) 
+frcs <- array(NA,c(h,5))
+#Perform rolling origin on in-sample set
+for (o in 1:omax){
+  sweden.ins <- head(sweden.trn,19*4-1+o) 
+  sweden.val <- tail(sweden.trn,5*4-o+1) 
+  for (m in 1:4){
+    fit1 <- ets(sweden.ins,model=models[m],damped=damped[m]) 
+    frcs[,m] <- forecast(fit1,h=h)$mean
+    err[o,m] <- mean(abs(sweden.val[1:h] - frcs[,m]))
+  }
+  frcs[,5] <- tail(sweden.ins,frequency(sweden.ins))[1:h] 
+  err[o,5] <- mean(abs(sweden.val[1:h] - frcs[,5]))
+}
+colnames(err) <- c("AAA","ANA","MNM","MAM","Naive")
+errMean <- colMeans(err)
+errMean
+```
+```{r}
+# Building ETS on test set
+modelsTest <- c("AAA","ANA","MNM","MAM", "Naive", "CombMean", "CombMedian")
+dampedTest <- c(TRUE, FALSE, FALSE,FALSE)
+omaxTest <- length(sweden.tst) - h + 1
+errTest <- array(NA,c(omaxTest,7))
+frcsTest <- array(NA,c(h,7))
+for (o in 1:omaxTest){
+  sweden.trnTest <- head(sweden,22*4-1+o) 
+  sweden.tstTest <- tail(sweden,3*4-o+1) 
+    for (m in 1:4){
+      fit1 <- ets(sweden.trnTest,model=modelsTest[m],damped=dampedTest[m]) 
+      frcsTest[,m] <- forecast(fit1,h=h)$mean
+      errTest[o,m] <- mean(abs(sweden.tstTest[1:h] - frcsTest[,m]))
+    }
+  frcsTest[,5] <- tail(sweden.trnTest,frequency(sweden.trnTest))[1:h]
+  errTest[o,5] <- mean(abs(sweden.tstTest[1:h] - frcsTest[,5]))
+  frcsTest[,6] <- apply(frcsTest[,1:5],1,mean)
+  errTest[o,6] <- mean(abs(sweden.tstTest[1:h] - frcsTest[,6]))
+  frcsTest[,7] <- apply(frcsTest[,1:5],1,median)
+  errTest[o,7] <- mean(abs(sweden.tstTest[1:h] - frcsTest[,7]))
+}
+colnames(errTest) <- c("AAA","ANA","MNM","MAM","Naive","Comb.Mean","Comb.Median")
+errMeanTest <- colMeans(errTest)
+errMeanTest
+```
+
+```{r}
+fit_naive <- naive(sweden.trn)
+naive_forecasts <- forecast(fit_naive, h = 4)
+mape <- MAPE(sweden.tst,tail(sweden.trnTest,frequency(sweden.trnTest))[1:4])*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+#Building model with MAM
+fit1 <- ets(sweden.trn,model="MNM",damped=FALSE) 
+frc1 <- forecast(fit1,h=4)
+mape <- MAPE(sweden.tst,frc1$mean)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+n <- length(sweden.trn)
+X <- array(NA,c(n,5))
+for (i in 1:5){
+  X[i:n,i] <- sweden.trn[1:(n-i+1)]
+}
+colnames(X) <- c("y",paste0("lag",1:4))
+X <- as.data.frame(X)
+plot(X)
+fit2 <- lm(y~.,data=X)
+fit2 <- step(fit2)
+#Forecast on training set
+plot(X$y,type="l")
+frc2 <- predict(fit2,X)
+lines(frc2,col="red")
+#Forecast on testing set
+frc2 <- array(NA,c(4,1))
+for (i in 1:4){
+  Xnew <- tail(sweden.trn,4)
+  Xnew <- c(Xnew,frc2)
+  Xnew <- Xnew[i:(3+i)]
+  Xnew <- Xnew[4:1]
+  Xnew <- array(Xnew, c(1,4)) 
+  colnames(Xnew) <- paste0("lag",1:4)  
+  Xnew <- as.data.frame(Xnew)
+  frc2[i] <- predict(fit2,Xnew)
+} 
+mape <- MAPE(sweden.tst,frc2)*100
+cat("MAPE:", mape, "%\n")
+#MAPE <- mean(abs((sweden.tst - frc2)/sweden.tst)) * 100
+#cat("MAPE:", MAPE, "%\n") 
+```
+```{r}
+D <- factor(rep(1:4,24))
+X2 <- cbind(X,D)
+colnames(X2) <- c(colnames(X2)[1:5],"D")
+fit3 <- lm(y~.,data=X2)
+summary(fit3)
+# Find NA in X2
+idx <- is.na(X2)
+idx <- rowSums(idx)
+idx <- idx == 0
+fit_temp <- lm(y~.,data=X2[idx,])
+# fit_temp is the same as fit3, without the first NA part 
+fit4 <- step(fit_temp)
+summary(fit4)
+frc3 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  Xnew <- tail(sweden.trn,4)
+  Xnew <- c(Xnew,frc3)
+  Xnew <- Xnew[i:(3+i)]
+  Xnew <- Xnew[4:1]
+  Xnew <- array(Xnew, c(1,4))
+  colnames(Xnew) <- paste0("lag",1:4)
+  Xnew <- as.data.frame(Xnew)
+  D <- as.factor(rep(1:4,1)[i])
+  frc3[i] <- predict(fit4,Xnew)
+}
+mape <- MAPE(sweden.tst,frc3)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+#Lasso
+xx <- as.matrix(X[-(1:4),-1])
+# For the target I retain only the first column 
+yy <- as.matrix(X[-(1:4),1])
+lasso <- cv.glmnet(x=xx,y=yy)
+frc4 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(sweden.trn,4),frc4)
+  Xnew <- (Xnew[i:(3+i)])[4:1]
+  Xnew <- array(Xnew, c(1,4)) 
+  colnames(Xnew) <- paste0("lag",1:4) 
+  # Forecast
+  frc4[i] <- predict(lasso,Xnew)
+}
+mape <- MAPE(sweden.tst,frc4)*100
+cat("MAPE:", mape, "%\n")
+```
+
+```{r}
+#Ridge
+ridge <- cv.glmnet(x=xx,y=yy,alpha=0)
+frc5 <- array(NA,c(4,1)) 
+for (i in 1:4){
+  # Create inputs - note for lasso we do not transform these into data.frame
+  Xnew <- c(tail(sweden.trn,4),frc5)
+  Xnew <- (Xnew[i:(3+i)])[4:1]
+  Xnew <- array(Xnew, c(1,4))
+  colnames(Xnew) <- paste0("lag",1:4) # Forecast 
+  frc5[i] <- predict(ridge,Xnew)
+}
+mape <- MAPE(sweden.tst,frc5)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+#Building THieF
+frc6 <- thief(sweden.trn,h=4,usemodel="arima")
+frc6_values <- frc6$mean
+mape <- MAPE(sweden.tst,frc6_values)*100
+cat("MAPE:", mape, "%\n")
+```
+```{r}
+frc2 <- ts(frc2,frequency=frequency(sweden.tst),start=start(sweden.tst))
+frc3 <- ts(frc3,frequency=frequency(sweden.tst),start=start(sweden.tst))
+frc4 <- ts(frc4,frequency=frequency(sweden.tst),start=start(sweden.tst))
+frc5 <- ts(frc5,frequency=frequency(sweden.tst),start=start(sweden.tst))
+frc6 <- ts(frc6_values,frequency=frequency(sweden.tst),start=start(sweden.tst))
+
+# Plot
+ts.plot(tail(sweden.trn,4), sweden.tst, fit1$mean, frc2, frc3, frc4, frc5, frc6, col = c("black", "black", "red", "blue","green","yellow","orange","brown"))
+legend("bottomleft", c("ETS(MNM)","Stepwise", "Dummies","lasso","Ridge","Thief"), col = c("red", "blue","green", "purple","orange","brown"), lty = 1)
+```
